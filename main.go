@@ -26,7 +26,9 @@ func init() {
 func main() {
 	ctrl.SetLogger(ctrlzap.New(ctrlzap.UseDevMode(true)))
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme: scheme,
+		Scheme:           scheme,
+		LeaderElection:   true,
+		LeaderElectionID: "happyhelm-controller-leader-election",
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
