@@ -1,0 +1,32 @@
+apiVersion: helm.k8s.ir/v1alpha1
+kind: DeployChart
+metadata:
+  name: haproxy-deployment
+spec:
+  chart:
+    repo: haproxy-charts
+    chart: haproxy
+    version: 1.24.0
+  vars:
+    image:
+      repository: docker.arvancloud.ir
+  values:
+    imageCredentials:
+      registry: {{ vars.image.repository }}
+    config: |
+      global
+        log stdout format raw local0
+        maxconn 1024
+
+      defaults
+        log global
+        timeout client 60s
+        timeout connect 60s
+        timeout server 60s
+
+      frontend fe_main
+        bind :80
+        default_backend be_main
+
+      backend be_main
+        server coredns_metrics 10.96.0.10:9153 check

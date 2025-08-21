@@ -1,0 +1,6 @@
+apiVersion: helm.k8s.ir/v1alpha1
+kind: Repository
+metadata:
+  name: haproxy-charts
+spec:
+  url: 'https://haproxytech.github.io/helm-charts'

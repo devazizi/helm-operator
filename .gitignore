@@ -1,0 +1,8 @@
+.idea
+.vscode
+main
+operator
+build
+tmp
+.env
+.conf
