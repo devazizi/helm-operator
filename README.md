@@ -443,6 +443,7 @@ replica count if configuring `persistence.existingClaim`.
 | `charts/helm-operator/` | The only installation path: StatefulSet, PVC, RBAC, webhook, and CRDs. |
 | `Dockerfile` | Multi-stage build for the operator runtime image. |
 | `.github/workflows/docker-image.yml` | Builds, publishes, and signs images for version tags. |
+| `.github/workflows/helm-chart.yml` | Lints, renders, packages, and uploads the Helm chart artifact. |
 
 ## Development
 
@@ -485,6 +486,14 @@ helm lint charts/helm-operator
 helm template helm-operator charts/helm-operator --namespace helm-operator
 helm package charts/helm-operator
 ```
+
+The `Helm Chart CI` GitHub Actions workflow runs these checks for chart pull
+requests and pushes to `master`. It renders the default, existing-PVC/proxy,
+external-TLS, and ephemeral-cache configurations. Version tags matching
+`v*.*.*` create or reuse a GitHub Release and permanently attach the packaged
+chart and its SHA-256 file. The tag must match `Chart.yaml`'s `appVersion`. The
+workflow can also be started manually with `workflow_dispatch`, which validates
+and packages without publishing.
 
 ### Release images
 
