@@ -21,6 +21,7 @@ func init() {
 	_ = corev1.AddToScheme(scheme)
 	_ = apiVersion.DeployAddToScheme(scheme)
 	_ = apiVersion.HelmRepoAddToScheme(scheme)
+	_ = apiVersion.ReflectorAddToScheme(scheme)
 }
 
 func main() {
@@ -49,6 +50,14 @@ func main() {
 		Log:    ctrl.Log.WithName("controllers").WithName("Repository"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Repository")
+		os.Exit(1)
+	}
+	if err = (&controllers.ReflectorReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		Log:    ctrl.Log.WithName("controllers").WithName("Reflector"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Reflector")
 		os.Exit(1)
 	}
 

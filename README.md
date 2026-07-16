@@ -21,12 +21,13 @@ add` and `helm upgrade --install` manually, you create `Repository` and
 - Report basic reconciliation state in the resource status.
 - Run multiple operator replicas safely through controller-runtime leader
   election.
+- Reflect Secrets and ConfigMaps into namespaces selected by wildcard patterns.
 - Build and publish a container image when a semantic version Git tag is pushed.
 
 ## How it works
 
-The operator watches two custom resource types in the `helm.k8s.ir/v1alpha1`
-API group:
+The operator watches Helm resources in the `helm.k8s.ir/v1alpha1` API group and
+a `Reflector` resource in `others.helm.k8s.ir/v1alpha1`:
 
 1. A cluster-scoped `Repository` runs `helm repo add` and `helm repo update`
    inside the operator container.
@@ -38,6 +39,8 @@ API group:
    causes another Helm upgrade.
 5. Deleting a `DeployChart` causes the operator to run `helm uninstall` for the
    corresponding release.
+6. A namespaced `Reflector` copies a Secret or ConfigMap with the same name and
+   namespace into namespaces selected by shell-style patterns.
 
 The operator uses the Helm CLI rather than the Helm Go SDK. The runtime image
 therefore includes `helm`, `kubectl`, and the compiled Go controller.
@@ -57,12 +60,13 @@ therefore includes `helm`, `kubectl`, and the compiled Go controller.
 ```bash
 kubectl apply -f crd/repo.crd.yaml
 kubectl apply -f crd/deploy.helm.yaml
+kubectl apply -f crd/reflector.crd.yaml
 ```
 
-Confirm that both CRDs exist:
+Confirm that all three CRDs exist:
 
 ```bash
-kubectl get crd repositories.helm.k8s.ir deploys.helm.k8s.ir
+kubectl get crd repositories.helm.k8s.ir deploys.helm.k8s.ir reflectors.others.helm.k8s.ir
 ```
 
 ### 2. Deploy the operator
@@ -220,6 +224,55 @@ kubectl delete repository haproxy-charts
 The controller attempts to remove the matching local Helm repository from the
 operator container.
 
+### Reflect a Secret or ConfigMap
+
+Create a `Reflector` in the same namespace and with the same name as its source
+object. `reflectTo` entries are shell-style namespace patterns: `*` matches any
+sequence of characters, `?` matches one character, and character classes such
+as `[a-z]` are supported.
+
+```yaml
+apiVersion: others.helm.k8s.ir/v1alpha1
+kind: Reflector
+metadata:
+  name: star-example-com
+  namespace: cert-manager
+spec:
+  kind: Secret
+  reflectTo:
+    - dev-*
+    - prod-*
+```
+
+In this example, the source must be a Secret named `star-example-com` in
+`cert-manager`. The operator creates and maintains a Secret with that name in
+every matching namespace. Use `kind: ConfigMap` to reflect a ConfigMap instead.
+
+```bash
+kubectl apply -f crd/reflector.crd.yaml
+kubectl apply -f examples/reflector-secret.yaml
+kubectl get reflectors -A
+kubectl get reflector star-example-com -n cert-manager -o yaml
+```
+
+Reflection has the following behavior:
+
+- Existing and newly created matching namespaces are supported.
+- Source data changes are copied to all targets.
+- Removing a pattern deletes copies that are no longer targeted.
+- Deleting the Reflector deletes all copies managed by that Reflector.
+- Deleting the source removes its managed copies and sets `Ready=False`.
+- The source namespace is skipped, because it already contains the source.
+- An existing target object that is not managed by this Reflector is never
+  overwritten; the Reflector reports a failed condition instead.
+- Source labels and annotations are not copied. Managed targets receive only
+  the operator's tracking metadata.
+
+The example files cover both supported kinds:
+
+- `examples/reflector-secret.yaml`
+- `examples/reflector-configmap.yaml`
+
 ## Custom resource reference
 
 ### `Repository`
@@ -251,6 +304,21 @@ short name is `repo`.
 The resource kind is `DeployChart`, its plural name is `deploys`, and its short
 name is `deploy`.
 
+### `Reflector`
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `spec.kind` | string | yes | Source kind: `Secret` or `ConfigMap`. |
+| `spec.reflectTo` | string array | yes | Shell-style patterns matched against namespace names. |
+| `status.observedGeneration` | integer | no | Latest resource generation handled by the controller. |
+| `status.reflectedNamespaceCount` | integer | no | Number of successfully synchronized namespaces. |
+| `status.reflectedNamespaces` | string array | no | Successfully synchronized namespace names. |
+| `status.conditions` | condition array | no | Standard Kubernetes conditions, including `Ready`. |
+
+The source is identified by the Reflector's own `metadata.name` and
+`metadata.namespace`. The resource kind is `Reflector`, its plural name is
+`reflectors`, and its short name is `reflect`.
+
 ## High availability
 
 The supplied deployment runs two replicas. Controller-runtime leader election
@@ -269,8 +337,10 @@ filesystem, which is not shared with another replica.
 | `main.go` | Creates the controller manager, registers APIs, enables leader election, and starts both controllers. |
 | `api/v1alpha1/helm_repo.go` | Go types for the `Repository` API. |
 | `api/v1alpha1/helm_chart.go` | Go types for the `DeployChart` API. |
+| `api/v1alpha1/reflector.go` | Go types for the `Reflector` API. |
 | `controller/helm_repo_controller.go` | Adds, updates, and removes Helm repositories. |
 | `controller/helm_chart_controller.go` | Installs, upgrades, and uninstalls Helm releases. |
+| `controller/reflector_controller.go` | Synchronizes Secrets and ConfigMaps across matching namespaces. |
 | `internal/template.go` | Experimental values templating helpers; these are not currently connected to reconciliation. |
 | `crd/` | Kubernetes CRD manifests. |
 | `deploy/` | Operator namespace, RBAC, and deployment manifest. |
@@ -356,6 +426,9 @@ or change the operator to use shared/persistent repository configuration.
   Production deployments should use a narrowly scoped custom role.
 - Repository credentials are stored as plain custom-resource fields instead of
   Secret references.
+- Secret reflection deliberately copies sensitive data into other namespaces.
+  Anyone who can read Secrets in a target namespace can read the reflected
+  value, so namespace patterns and Reflector RBAC must be tightly controlled.
 - An error from `helm repo add` is currently logged but not returned by the
   helper, so a failed repository can incorrectly be marked as processed.
 - Helm repository configuration is local to one pod and is not preserved across
