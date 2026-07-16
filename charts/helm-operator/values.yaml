@@ -1,4 +1,4 @@
-replicaCount: 2
+replicaCount: 1
 
 image:
   repository: ghcr.io/devazizi/helm-operator
@@ -18,6 +18,27 @@ serviceAccount:
 
 rbac:
   create: true
+
+# Standard proxy variables used by Helm's HTTP clients. existingSecret may
+# contain HTTP_PROXY, HTTPS_PROXY, NO_PROXY and/or their lowercase equivalents.
+proxy:
+  httpProxy: ""
+  httpsProxy: ""
+  noProxy: ""
+  existingSecret: ""
+
+# Downloaded chart archives are retained as .tgz files. StatefulSet-generated
+# claims are not removed automatically when the Helm release is uninstalled.
+persistence:
+  enabled: true
+  existingClaim: ""
+  mountPath: /var/cache/helm
+  accessModes:
+    - ReadWriteOnce
+  size: 5Gi
+  storageClass: ""
+  annotations: {}
+  selector: {}
 
 webhook:
   # Identity admission always fails closed; this timeout bounds API write delay.
@@ -68,7 +89,8 @@ topologySpreadConstraints: []
 
 terminationGracePeriodSeconds: 10
 revisionHistoryLimit: 3
-strategy: {}
+updateStrategy:
+  type: RollingUpdate
 
 extraEnv: []
 extraVolumeMounts: []

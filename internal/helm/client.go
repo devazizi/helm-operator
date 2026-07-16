@@ -2,12 +2,15 @@ package helm
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	helmv1alpha1 "happyhelm.sh/api/helm/v1alpha1"
@@ -21,16 +24,20 @@ import (
 
 const defaultActionTimeout = 5 * time.Minute
 
+const chartCacheEnvironmentVariable = "HELM_CHART_CACHE"
+
 type Client interface {
 	ValidateRepository(context.Context, *helmv1alpha1.Repository) error
 	InstallOrUpgrade(context.Context, *helmv1alpha1.DeployChart, *helmv1alpha1.Repository, helmv1alpha1.CreatorIdentity) error
 	Uninstall(context.Context, string, string, helmv1alpha1.CreatorIdentity) error
 }
 
-type SDKClient struct{}
+type SDKClient struct {
+	ChartCache string
+}
 
 func NewSDKClient() *SDKClient {
-	return &SDKClient{}
+	return &SDKClient{ChartCache: strings.TrimSpace(os.Getenv(chartCacheEnvironmentVariable))}
 }
 
 func (c *SDKClient) ValidateRepository(_ context.Context, repository *helmv1alpha1.Repository) error {
@@ -73,7 +80,7 @@ func (c *SDKClient) InstallOrUpgrade(ctx context.Context, deploy *helmv1alpha1.D
 	}
 
 	chartOptions := chartPathOptions(deploy, repository)
-	chartPath, err := chartOptions.LocateChart(deploy.Spec.Chart.Chart, settings)
+	chartPath, err := c.locateChart(deploy, repository, settings, chartOptions)
 	if err != nil {
 		return fmt.Errorf("locate chart %q in repository %q: %w", deploy.Spec.Chart.Chart, repository.Name, err)
 	}
@@ -149,9 +156,86 @@ func newSettings(namespace string, identity helmv1alpha1.CreatorIdentity) (*cli.
 	settings.KubeAsGroups = append([]string(nil), identity.Groups...)
 	settings.RepositoryCache = filepath.Join(tmpDir, "repository")
 	settings.RepositoryConfig = filepath.Join(tmpDir, "repositories.yaml")
-	settings.ContentCache = filepath.Join(tmpDir, "content")
+	if contentCache := strings.TrimSpace(os.Getenv("HELM_CONTENT_CACHE")); contentCache != "" {
+		settings.ContentCache = contentCache
+	} else {
+		settings.ContentCache = filepath.Join(tmpDir, "content")
+	}
 	settings.RegistryConfig = filepath.Join(tmpDir, "registry.json")
 	return settings, func() { _ = os.RemoveAll(tmpDir) }, nil
+}
+
+func (c *SDKClient) locateChart(deploy *helmv1alpha1.DeployChart, repository *helmv1alpha1.Repository, settings *cli.EnvSettings, options action.ChartPathOptions) (string, error) {
+	cachePath := chartArchiveCachePath(c.ChartCache, deploy, repository)
+	if cachePath != "" {
+		if info, err := os.Stat(cachePath); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
+			return cachePath, nil
+		} else if err != nil && !os.IsNotExist(err) {
+			return "", fmt.Errorf("inspect cached chart archive: %w", err)
+		}
+	}
+
+	downloadedPath, err := options.LocateChart(deploy.Spec.Chart.Chart, settings)
+	if err != nil {
+		return "", err
+	}
+	if cachePath == "" {
+		return downloadedPath, nil
+	}
+	if err := persistChartArchive(downloadedPath, cachePath); err != nil {
+		return "", err
+	}
+	return cachePath, nil
+}
+
+func chartArchiveCachePath(cacheRoot string, deploy *helmv1alpha1.DeployChart, repository *helmv1alpha1.Repository) string {
+	if strings.TrimSpace(cacheRoot) == "" {
+		return ""
+	}
+	key := strings.Join([]string{
+		repository.Spec.URL,
+		deploy.Spec.Chart.Chart,
+		deploy.Spec.Chart.Version,
+	}, "\x00")
+	digest := sha256.Sum256([]byte(key))
+	return filepath.Join(cacheRoot, "charts", hex.EncodeToString(digest[:])+".tgz")
+}
+
+func persistChartArchive(sourcePath, cachePath string) (returnErr error) {
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		return fmt.Errorf("create chart cache directory: %w", err)
+	}
+	source, err := os.Open(sourcePath)
+	if err != nil {
+		return fmt.Errorf("open downloaded chart archive: %w", err)
+	}
+	defer source.Close()
+
+	temporary, err := os.CreateTemp(filepath.Dir(cachePath), ".chart-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temporary chart cache file: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	defer func() {
+		_ = temporary.Close()
+		if returnErr != nil {
+			_ = os.Remove(temporaryPath)
+		}
+	}()
+
+	if _, err := io.Copy(temporary, source); err != nil {
+		return fmt.Errorf("copy chart archive into cache: %w", err)
+	}
+	if err := temporary.Chmod(0o644); err != nil {
+		return fmt.Errorf("set cached chart permissions: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close cached chart archive: %w", err)
+	}
+	if err := os.Rename(temporaryPath, cachePath); err != nil {
+		return fmt.Errorf("publish cached chart archive: %w", err)
+	}
+	return nil
 }
 
 func chartPathOptions(deploy *helmv1alpha1.DeployChart, repository *helmv1alpha1.Repository) action.ChartPathOptions {

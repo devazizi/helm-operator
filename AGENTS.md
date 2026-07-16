@@ -25,13 +25,8 @@ actions can use Kubernetes user/group impersonation.
 - `internal/helm/`: Helm SDK integration and impersonated action settings.
 - `internal/webhook/`: trusted creator-identity admission handling.
 - `internal/values/`: experimental values helpers.
-- `config/crd/bases/`: canonical CRD manifests.
-- `config/kustomization.yaml`: Kustomize entry point for the raw installation.
-- `config/manager/`: raw operator Deployment manifest.
-- `config/rbac/`: raw service account and RBAC manifests.
-- `config/webhook/`: raw webhook Service, TLS, and admission manifests.
-- `config/samples/`: example custom resources.
-- `charts/helm-operator/`: Helm installation chart and CRD copies.
+- `charts/helm-operator/`: the sole installation path, including canonical
+  CRDs, StatefulSet, persistent cache, RBAC, webhook TLS, and Services.
 - `Dockerfile`: operator container build.
 
 ## Development commands
@@ -50,10 +45,10 @@ Format changed Go files before finishing:
 gofmt -w <changed-go-files>
 ```
 
-Validate YAML files locally when `yq` is available:
+Validate chart YAML by rendering it:
 
 ```bash
-yq eval '.' config/crd/bases/example.yaml >/dev/null
+helm template helm-operator charts/helm-operator --namespace helm-operator
 ```
 
 When the environment restricts writes to the default Go cache, use a temporary
@@ -87,16 +82,14 @@ GOCACHE=/tmp/helm-operator-gocache go test ./...
 
 ## API and CRD changes
 
-The CRDs under `config/crd/bases/` are maintained alongside the Go API types.
-The Helm chart contains install-time copies under `charts/helm-operator/crds/`.
+The canonical CRDs are under `charts/helm-operator/crds/` and are maintained
+alongside the Go API types. Do not reintroduce a separate raw-manifest tree.
 When an API field changes, update all of the following in the same change:
 
 1. The matching type under `api/helm/v1alpha1/` or `api/others/v1alpha1/`.
-2. The canonical OpenAPI schema under `config/crd/bases/`.
-3. The corresponding CRD copy under `charts/helm-operator/crds/`.
-4. Example manifests under `config/samples/` when relevant.
-5. The custom-resource reference in `README.md`.
-6. Tests covering validation or behavior changes.
+2. The canonical OpenAPI schema under `charts/helm-operator/crds/`.
+3. The custom-resource reference in `README.md`.
+4. Tests covering validation or behavior changes.
 
 New fields should include appropriate validation, such as required fields,
 enums, minimum lengths, and array limits. Avoid silently accepting unsupported
@@ -141,6 +134,10 @@ or logs.
 - A finalizer must protect impersonated uninstall-on-delete.
 - Repository URLs are used directly for isolated SDK actions; do not introduce
   correctness dependencies on pod-local Helm configuration.
+- Persistent chart archives use `HELM_CHART_CACHE` and must remain valid `.tgz`
+  files keyed by repository URL, chart name, and version.
+- Standard HTTP proxy environment variables must continue to reach all Helm SDK
+  repository and chart HTTP clients.
 - The existing values-template helper in `internal/values/template.go` is experimental
   and is not part of active reconciliation.
 
@@ -181,6 +178,9 @@ For chart or deployment changes, also run:
 helm lint charts/helm-operator
 helm template helm-operator charts/helm-operator --namespace helm-operator
 ```
+
+The chart is the only supported deployment mechanism. Do not add Kustomize or
+standalone namespace, RBAC, controller, webhook, sample, or CRD manifests.
 
 For controller changes, tests should cover the success path and important
 safety behavior. Examples include:

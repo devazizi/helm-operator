@@ -1,9 +1,0 @@
-apiVersion: cert-manager.io/v1
-kind: Issuer
-metadata:
-  name: helm-operator-selfsigned
-  namespace: helm-operator
-  labels:
-    app.kubernetes.io/name: helm-operator
-spec:
-  selfSigned: {}

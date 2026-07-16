@@ -1,7 +1,7 @@
 Helm Operator has been installed in namespace {{ .Release.Namespace }}.
 
 Check the controller:
-  kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+  kubectl get statefulset,pods,pvc -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
 
 List managed resources:
   kubectl get repositories
@@ -10,3 +10,7 @@ List managed resources:
 
 Helm release actions use the authenticated DeployChart creator via Kubernetes
 impersonation. Inspect the effective identity in status.executedAs.
+
+Downloaded chart archives are cached as .tgz files at
+{{ .Values.persistence.mountPath }}. StatefulSet-generated PVCs are retained
+after Helm uninstall.
