@@ -2,8 +2,8 @@ apiVersion: v2
 name: helm-operator
 description: A Kubernetes operator for Helm releases, repositories, and cross-namespace Secret or ConfigMap reflection.
 type: application
-version: 0.2.0
-appVersion: "v1.1.0"
+version: 0.3.0
+appVersion: "v1.2.0"
 home: https://github.com/devazizi/helm-operator
 sources:
   - https://github.com/devazizi/helm-operator

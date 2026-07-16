@@ -21,8 +21,9 @@ add` and `helm upgrade --install` manually, you create `Repository` and
 - Execute release operations with Kubernetes impersonation as the authenticated
   user who originally created the `DeployChart`.
 - Report basic reconciliation state in the resource status.
-- Run multiple operator replicas safely through controller-runtime leader
-  election.
+- Run as a StatefulSet with a persistent `.tgz` chart cache.
+- Reach internal or mirrored repositories through configurable HTTP/HTTPS
+  proxies.
 - Reflect Secrets and ConfigMaps into namespaces selected by wildcard patterns.
 - Build and publish a container image when a semantic version Git tag is pushed.
 
@@ -56,6 +57,7 @@ the `helm` or `kubectl` executables.
 - `kubectl` configured for that cluster
 - cert-manager installed, unless you provide a webhook TLS Secret and CA bundle
 - Helm 3 or newer only for installing and validating this operator's chart
+- A default StorageClass or a pre-created PVC for the chart cache
 - Docker or another OCI builder, when building the image locally
 - Go 1.26 or newer, when developing locally
 
@@ -87,12 +89,20 @@ Important chart values include:
 
 | Value | Default | Description |
 | --- | --- | --- |
-| `replicaCount` | `2` | Number of replicas; leader election keeps one active. |
+| `replicaCount` | `1` | Number of StatefulSet replicas; one is recommended for a `ReadWriteOnce` cache. |
 | `image.repository` | `ghcr.io/devazizi/helm-operator` | Operator image repository. |
 | `image.tag` | `""` | Image tag; an empty value uses `Chart.appVersion`. |
 | `serviceAccount.create` | `true` | Create a ServiceAccount for the operator. |
 | `serviceAccount.name` | `""` | Existing ServiceAccount name when creation is disabled. |
 | `rbac.create` | `true` | Create the operator ClusterRole and ClusterRoleBinding. |
+| `persistence.enabled` | `true` | Create a StatefulSet claim for cached chart archives. |
+| `persistence.existingClaim` | `""` | Mount a pre-created PVC instead of a claim template. |
+| `persistence.size` | `5Gi` | Requested chart-cache capacity. |
+| `persistence.storageClass` | `""` | StorageClass; empty uses the cluster default and `-` disables dynamic selection. |
+| `proxy.httpProxy` | `""` | HTTP proxy URL exposed as `HTTP_PROXY` and `http_proxy`. |
+| `proxy.httpsProxy` | `""` | HTTPS proxy URL exposed as `HTTPS_PROXY` and `https_proxy`. |
+| `proxy.noProxy` | `""` | Comma-separated proxy exclusions. |
+| `proxy.existingSecret` | `""` | Secret containing standard proxy environment variables. |
 | `webhook.certManager.enabled` | `true` | Have cert-manager issue and inject webhook TLS data. |
 | `webhook.certManager.createIssuer` | `true` | Create a self-signed namespaced Issuer. |
 | `webhook.certManager.issuerRef` | built-in Issuer | Use an existing Issuer or ClusterIssuer instead. |
@@ -109,6 +119,31 @@ but anyone who compromises the operator ServiceAccount could attempt to
 impersonate another identity. Restrict access to that ServiceAccount and adjust
 the `impersonate` rules if your identity model permits a narrower scope.
 
+For a restricted network, mirror the operator image and required charts into
+reachable registries or repositories. Configure an egress proxy when one is
+available:
+
+```bash
+helm upgrade --install helm-operator ./charts/helm-operator \
+  --namespace helm-operator \
+  --create-namespace \
+  --set image.repository=registry.internal.example/helm-operator \
+  --set proxy.httpProxy=http://proxy.internal.example:3128 \
+  --set proxy.httpsProxy=http://proxy.internal.example:3128 \
+  --set-string proxy.noProxy='kubernetes.default.svc\,.svc\,.cluster.local\,10.0.0.0/8'
+```
+
+Proxy credentials can instead be placed in a Secret using keys such as
+`HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`, then selected with
+`proxy.existingSecret`. Explicit proxy values take precedence over variables
+from that Secret.
+
+Downloaded charts are retained under `persistence.mountPath` as deterministic
+`.tgz` archives keyed by repository URL, chart name, and version. A cached
+combination can be reused after restart without downloading its archive again.
+Repository validation still needs the repository index to be reachable when a
+`Repository` resource is first created or changed.
+
 To manage TLS without cert-manager, provide a `kubernetes.io/tls` Secret whose
 certificate is valid for the chart's webhook Service and pass its CA bundle:
 
@@ -121,13 +156,8 @@ helm upgrade --install helm-operator ./charts/helm-operator \
   --set webhook.caBundle='<base64-ca-bundle>'
 ```
 
-Helm installs files from the chart's `crds/` directory on the first install.
-Helm does not automatically upgrade or remove CRDs, so apply updated CRDs
-manually before an upgrade that changes their schemas:
-
-```bash
-kubectl apply -f config/crd/bases/
-```
+Helm installs the CRDs from the chart's `crds/` directory. There is no separate
+raw-manifest installation path.
 
 Uninstall the operator with:
 
@@ -135,27 +165,17 @@ Uninstall the operator with:
 helm uninstall helm-operator --namespace helm-operator
 ```
 
-The CRDs and existing custom resources remain after Helm uninstall and must be
-removed separately only when their data is no longer needed.
-
-### Install with raw manifests
-
-```bash
-kubectl apply -k config
-```
+The CRDs, existing custom resources, and StatefulSet-generated PVCs remain after
+Helm uninstall. Remove them separately only when their releases and cached
+archives are no longer needed.
 
 Confirm the installation:
 
 ```bash
 kubectl get crd repositories.helm.k8s.ir deploys.helm.k8s.ir reflectors.others.helm.k8s.ir
-kubectl get pods -n helm-operator
-kubectl logs -n helm-operator deployment/helm-operator --follow
+kubectl get statefulset,pods,pvc -n helm-operator
+kubectl logs -n helm-operator statefulset/helm-operator --follow
 ```
-
-The raw manifests also require cert-manager and create a namespaced self-signed
-Issuer and Certificate. The Deployment uses
-`ghcr.io/devazizi/helm-operator:v1.1.0`. Update its
-image when running a newer release or a locally built image.
 
 ## Usage
 
@@ -175,7 +195,7 @@ spec:
 Apply and inspect it:
 
 ```bash
-kubectl apply -f config/samples/helm_v1alpha1_repository.yaml
+kubectl apply -f repository.yaml
 kubectl get repositories
 kubectl get repository haproxy-charts -o yaml
 ```
@@ -329,8 +349,7 @@ In this example, the source must be a Secret named `star-example-com` in
 every matching namespace. Use `kind: ConfigMap` to reflect a ConfigMap instead.
 
 ```bash
-kubectl apply -f config/crd/bases/others.helm.k8s.ir_reflectors.yaml
-kubectl apply -f config/samples/others_v1alpha1_reflector_secret.yaml
+kubectl apply -f reflector.yaml
 kubectl get reflectors -A
 kubectl get reflector star-example-com -n cert-manager -o yaml
 ```
@@ -348,10 +367,8 @@ Reflection has the following behavior:
 - Source labels and annotations are not copied. Managed targets receive only
   the operator's tracking metadata.
 
-The example files cover both supported kinds:
-
-- `config/samples/others_v1alpha1_reflector_secret.yaml`
-- `config/samples/others_v1alpha1_reflector_configmap.yaml`
+Change `spec.kind` to `ConfigMap` for ConfigMap sources. Save the manifest above
+as `reflector.yaml` before applying it.
 
 ## Custom resource reference
 
@@ -403,14 +420,14 @@ The source is identified by the Reflector's own `metadata.name` and
 
 ## High availability
 
-The supplied deployment runs two replicas. Controller-runtime leader election
-uses the ID `happyhelm-controller-leader-election`, so only the elected replica
-actively reconciles resources at a given time.
+The chart runs one StatefulSet replica by default. Controller-runtime leader
+election uses the ID `happyhelm-controller-leader-election`, so only one replica
+actively reconciles resources if `replicaCount` is increased.
 
-Leader election protects against two replicas operating on the same resources
-simultaneously. Helm settings and repository downloads use isolated temporary
-directories for each action, so correctness does not depend on pod-local
-repository configuration surviving a leader change.
+Leader election protects against replicas operating on the same resources
+simultaneously. With a StatefulSet claim template, every replica receives its
+own cache PVC. Use a storage backend and access mode appropriate for your
+replica count if configuring `persistence.existingClaim`.
 
 ## Project structure
 
@@ -423,15 +440,10 @@ repository configuration surviving a leader change.
 | `internal/helm/` | Helm Go SDK adapter and impersonated action configuration. |
 | `internal/webhook/` | Admission webhook that captures and protects creator identity. |
 | `internal/values/` | Experimental values templating helpers; not connected to reconciliation. |
-| `config/crd/bases/` | Canonical Kubernetes CRD manifests. |
-| `config/kustomization.yaml` | Kustomize entry point for the complete raw installation. |
-| `config/manager/` | Raw operator Deployment manifest. |
-| `config/rbac/` | Raw service account and RBAC manifests. |
-| `config/webhook/` | Raw webhook Service, certificate, Issuer, and admission configuration. |
-| `config/samples/` | Example custom resources. |
-| `charts/helm-operator/` | Helm chart for installing the operator and its CRDs. |
+| `charts/helm-operator/` | The only installation path: StatefulSet, PVC, RBAC, webhook, and CRDs. |
 | `Dockerfile` | Multi-stage build for the operator runtime image. |
 | `.github/workflows/docker-image.yml` | Builds, publishes, and signs images for version tags. |
+| `.github/workflows/helm-chart.yml` | Lints, renders, packages, and uploads the Helm chart artifact. |
 
 ## Development
 
@@ -465,8 +477,7 @@ docker build -t helm-operator:local .
 ```
 
 Push the image to a registry accessible by your cluster, then set
-`image.repository` and `image.tag` during Helm installation or update the image
-in `config/manager/manager.yaml`.
+`image.repository` and `image.tag` during Helm installation.
 
 ### Validate and package the Helm chart
 
@@ -475,6 +486,14 @@ helm lint charts/helm-operator
 helm template helm-operator charts/helm-operator --namespace helm-operator
 helm package charts/helm-operator
 ```
+
+The `Helm Chart CI` GitHub Actions workflow runs these checks for chart pull
+requests and pushes to `master`. It renders the default, existing-PVC/proxy,
+external-TLS, and ephemeral-cache configurations. Version tags matching
+`v*.*.*` create or reuse a GitHub Release and permanently attach the packaged
+chart and its SHA-256 file. The tag must match `Chart.yaml`'s `appVersion`. The
+workflow can also be started manually with `workflow_dispatch`, which validates
+and packages without publishing.
 
 ### Release images
 
@@ -490,7 +509,7 @@ Inspect the resource and operator logs:
 
 ```bash
 kubectl describe repository <repository-name>
-kubectl logs -n helm-operator deployment/helm-operator
+kubectl logs -n helm-operator statefulset/helm-operator
 ```
 
 Check that the repository URL is reachable from the operator pod and that any
@@ -502,7 +521,7 @@ Verify the repository name, chart name, chart version, and namespace:
 
 ```bash
 kubectl describe deploychart <release-name> -n <namespace>
-kubectl logs -n helm-operator deployment/helm-operator
+kubectl logs -n helm-operator statefulset/helm-operator
 helm list -n <namespace>
 ```
 

@@ -6,6 +6,10 @@
 {{- printf "%s-webhook" (include "helm-operator.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
+{{- define "helm-operator.headlessServiceName" -}}
+{{- printf "%s-headless" (include "helm-operator.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
 {{- define "helm-operator.webhookCertificateName" -}}
 {{- printf "%s-webhook-cert" (include "helm-operator.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}

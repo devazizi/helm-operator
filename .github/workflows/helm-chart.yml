@@ -1,0 +1,124 @@
+name: Helm Chart CI
+
+on:
+  pull_request:
+    paths:
+      - charts/helm-operator/**
+      - .github/workflows/helm-chart.yml
+  push:
+    branches:
+      - master
+    tags:
+      - v*.*.*
+  workflow_dispatch:
+
+concurrency:
+  group: helm-chart-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  CHART_PATH: charts/helm-operator
+  DIST_DIR: dist
+  HELM_VERSION: v3.20.2
+
+jobs:
+  build:
+    name: Lint, render, and package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Helm
+        uses: azure/setup-helm@v5
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Show Helm version
+        run: helm version --short
+
+      - name: Lint chart
+        run: helm lint --strict "$CHART_PATH"
+
+      - name: Render default StatefulSet and PVC
+        run: helm template helm-operator "$CHART_PATH" --namespace helm-operator > /dev/null
+
+      - name: Render existing PVC, proxy, and external TLS
+        run: |
+          helm template helm-operator "$CHART_PATH" \
+            --namespace helm-operator \
+            --set persistence.existingClaim=shared-helm-cache \
+            --set proxy.httpProxy=http://proxy.internal.example:3128 \
+            --set proxy.httpsProxy=http://proxy.internal.example:3128 \
+            --set-string proxy.noProxy='.svc\,.cluster.local' \
+            --set proxy.existingSecret=proxy-environment \
+            --set webhook.certManager.enabled=false \
+            --set webhook.existingSecret=helm-operator-webhook-tls \
+            --set webhook.caBundle=Y2E= \
+            > /dev/null
+
+      - name: Render ephemeral cache mode
+        run: |
+          helm template helm-operator "$CHART_PATH" \
+            --namespace helm-operator \
+            --set persistence.enabled=false \
+            > /dev/null
+
+      - name: Package chart
+        id: package
+        shell: bash
+        run: |
+          mkdir -p "$DIST_DIR"
+          helm package "$CHART_PATH" --destination "$DIST_DIR"
+
+          chart_version="$(helm show chart "$CHART_PATH" | awk '$1 == "version:" { print $2; exit }')"
+          package_path="$DIST_DIR/helm-operator-$chart_version.tgz"
+          test -f "$package_path"
+
+          packaged_version="$(helm show chart "$package_path" | awk '$1 == "version:" { print $2; exit }')"
+          test "$packaged_version" = "$chart_version"
+          helm lint --strict "$package_path"
+          checksum_path="$package_path.sha256"
+          package_filename="$(basename "$package_path")"
+          checksum_filename="$(basename "$checksum_path")"
+          (
+            cd "$DIST_DIR"
+            sha256sum "$package_filename" > "$checksum_filename"
+          )
+          cat "$checksum_path"
+
+          echo "chart_version=$chart_version" >> "$GITHUB_OUTPUT"
+          echo "package_path=$package_path" >> "$GITHUB_OUTPUT"
+          echo "checksum_path=$checksum_path" >> "$GITHUB_OUTPUT"
+
+      - name: Publish permanent GitHub Release assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          PACKAGE_PATH: ${{ steps.package.outputs.package_path }}
+          CHECKSUM_PATH: ${{ steps.package.outputs.checksum_path }}
+        run: |
+          app_version="$(helm show chart "$CHART_PATH" | awk '$1 == "appVersion:" { print $2; exit }')"
+          if [ "$RELEASE_TAG" != "$app_version" ]; then
+            echo "Release tag $RELEASE_TAG must match Chart.yaml appVersion $app_version" >&2
+            exit 1
+          fi
+
+          if ! gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --verify-tag \
+              --title "$RELEASE_TAG" \
+              --generate-notes
+          fi
+
+          gh release upload "$RELEASE_TAG" \
+            "$PACKAGE_PATH" \
+            "$CHECKSUM_PATH" \
+            --clobber

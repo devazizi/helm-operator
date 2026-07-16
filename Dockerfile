@@ -24,6 +24,7 @@ COPY --from=builder /app/operator /app/operator
 ENV GIN_MODE=release \
     HOME=/tmp \
     HELM_CACHE_HOME=/tmp/helm/cache \
+    HELM_CHART_CACHE=/tmp/helm/charts \
     HELM_CONFIG_HOME=/tmp/helm/config \
     HELM_DATA_HOME=/tmp/helm/data
 RUN chmod +x /app/operator
