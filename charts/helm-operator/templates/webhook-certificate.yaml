@@ -1,0 +1,30 @@
+{{- if .Values.webhook.certManager.enabled }}
+{{- if .Values.webhook.certManager.createIssuer }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "helm-operator.webhookIssuerName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "helm-operator.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+{{- end }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "helm-operator.webhookCertificateName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "helm-operator.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "helm-operator.webhookCertificateName" . }}
+  dnsNames:
+    - {{ include "helm-operator.webhookServiceName" . }}.{{ .Release.Namespace }}.svc
+    - {{ include "helm-operator.webhookServiceName" . }}.{{ .Release.Namespace }}.svc.cluster.local
+  issuerRef:
+    apiGroup: cert-manager.io
+    kind: {{ .Values.webhook.certManager.issuerRef.kind }}
+    name: {{ include "helm-operator.webhookIssuerName" . }}
+{{- end }}

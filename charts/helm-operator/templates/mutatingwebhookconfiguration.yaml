@@ -1,0 +1,33 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ include "helm-operator.fullname" . }}-identity
+  labels:
+    {{- include "helm-operator.labels" . | nindent 4 }}
+  {{- if .Values.webhook.certManager.enabled }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "helm-operator.webhookCertificateName" . }}
+  {{- end }}
+webhooks:
+  - name: deploychart-identity.helm.k8s.ir
+    admissionReviewVersions: ["v1"]
+    clientConfig:
+      {{- if not .Values.webhook.certManager.enabled }}
+      caBundle: {{ required "webhook.caBundle is required when webhook.certManager.enabled is false" .Values.webhook.caBundle | quote }}
+      {{- end }}
+      service:
+        name: {{ include "helm-operator.webhookServiceName" . }}
+        namespace: {{ .Release.Namespace }}
+        path: /mutate-helm-k8s-ir-v1alpha1-deploychart-identity
+        port: 443
+    failurePolicy: Fail
+    matchPolicy: Equivalent
+    reinvocationPolicy: Never
+    rules:
+      - apiGroups: ["helm.k8s.ir"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["deploys"]
+        scope: Namespaced
+    sideEffects: None
+    timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
