@@ -1,0 +1,215 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "replicaCount": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "image": {
+      "type": "object",
+      "required": ["repository", "pullPolicy"],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "pullPolicy": {
+          "type": "string",
+          "enum": ["Always", "IfNotPresent", "Never"]
+        },
+        "tag": {
+          "type": "string"
+        }
+      }
+    },
+    "serviceAccount": {
+      "type": "object",
+      "required": ["create", "automount", "name"],
+      "properties": {
+        "create": {
+          "type": "boolean"
+        },
+        "automount": {
+          "type": "boolean"
+        },
+        "annotations": {
+          "type": "object"
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "rbac": {
+      "type": "object",
+      "required": ["create"],
+      "properties": {
+        "create": {
+          "type": "boolean"
+        }
+      }
+    },
+    "webhook": {
+      "type": "object",
+      "required": ["timeoutSeconds", "certManager", "existingSecret", "caBundle"],
+      "properties": {
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30
+        },
+        "certManager": {
+          "type": "object",
+          "required": ["enabled", "createIssuer", "issuerRef"],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "createIssuer": {
+              "type": "boolean"
+            },
+            "issuerRef": {
+              "type": "object",
+              "required": ["name", "kind"],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": ["Issuer", "ClusterIssuer"]
+                }
+              }
+            }
+          }
+        },
+        "existingSecret": {
+          "type": "string"
+        },
+        "caBundle": {
+          "type": "string"
+        }
+      }
+    },
+    "imagePullSecrets": {
+      "type": "array"
+    },
+    "resources": {
+      "type": "object"
+    },
+    "terminationGracePeriodSeconds": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "revisionHistoryLimit": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "extraEnv": {
+      "type": "array"
+    },
+    "extraVolumeMounts": {
+      "type": "array"
+    },
+    "extraVolumes": {
+      "type": "array"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "serviceAccount": {
+            "properties": {
+              "create": {
+                "const": false
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "serviceAccount": {
+            "properties": {
+              "name": {
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "webhook": {
+            "properties": {
+              "certManager": {
+                "properties": {
+                  "enabled": {
+                    "const": false
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "webhook": {
+            "properties": {
+              "existingSecret": {
+                "minLength": 1
+              },
+              "caBundle": {
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "webhook": {
+            "properties": {
+              "certManager": {
+                "properties": {
+                  "enabled": {
+                    "const": true
+                  },
+                  "createIssuer": {
+                    "const": false
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "webhook": {
+            "properties": {
+              "certManager": {
+                "properties": {
+                  "issuerRef": {
+                    "properties": {
+                      "name": {
+                        "minLength": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

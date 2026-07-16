@@ -1,0 +1,42 @@
+{{- if .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "helm-operator.fullname" . }}
+  labels:
+    {{- include "helm-operator.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["helm.k8s.ir"]
+    resources: ["deploys"]
+    verbs: ["get", "list", "patch", "update", "watch"]
+  - apiGroups: ["helm.k8s.ir"]
+    resources: ["repositories"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["helm.k8s.ir"]
+    resources: ["deploys/status", "repositories/status"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: ["helm.k8s.ir"]
+    resources: ["deploys/finalizers"]
+    verbs: ["update"]
+  - apiGroups: ["others.helm.k8s.ir"]
+    resources: ["reflectors"]
+    verbs: ["get", "list", "patch", "update", "watch"]
+  - apiGroups: ["others.helm.k8s.ir"]
+    resources: ["reflectors/status", "reflectors/finalizers"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets", "configmaps"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["create", "get", "list", "patch", "update", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["users", "groups"]
+    verbs: ["impersonate"]
+{{- end }}

@@ -1,0 +1,12 @@
+Helm Operator has been installed in namespace {{ .Release.Namespace }}.
+
+Check the controller:
+  kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+
+List managed resources:
+  kubectl get repositories
+  kubectl get deploycharts -A
+  kubectl get reflectors -A
+
+Helm release actions use the authenticated DeployChart creator via Kubernetes
+impersonation. Inspect the effective identity in status.executedAs.
